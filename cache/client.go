@@ -2,11 +2,24 @@ package cache
 
 import (
 	"context"
+	"crypto/tls"
+	"net"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/redis/go-redis/v9/maintnotifications"
 )
+
+// TLSConfig enables TLS on the redis connection; required by managed providers
+// such as DigitalOcean Managed Valkey, which refuse plaintext.
+type TLSConfig struct {
+	// Enabled turns on TLS for the redis connection
+	Enabled bool `json:"enabled" koanf:"enabled" default:"false"`
+	// InsecureSkipVerify disables certificate verification; break-glass only
+	InsecureSkipVerify bool `json:"insecureskipverify" koanf:"insecureskipverify" default:"false"`
+	// ServerName overrides the name checked against the certificate; defaults to Address's host
+	ServerName string `json:"servername" koanf:"servername"`
+}
 
 // Config for the redis client used to store key-value pairs
 type Config struct {
@@ -48,6 +61,8 @@ type Config struct {
 	// Maximum number of connections allocated by the pool at a given time.
 	// When zero, there is no limit on the number of connections in the pool.
 	MaxActiveConns int `json:"maxactiveconns" koanf:"maxactiveconns" default:"0"`
+	// TLS contains the TLS settings for the connection
+	TLS TLSConfig `json:"tls" koanf:"tls"`
 }
 
 // New returns a new redis client based on the configuration settings
@@ -79,6 +94,23 @@ func New(c Config) *redis.Client {
 
 	if c.Password != "" {
 		opts.Password = c.Password
+	}
+
+	if c.TLS.Enabled {
+		serverName := c.TLS.ServerName
+		if serverName == "" {
+			if host, _, err := net.SplitHostPort(c.Address); err == nil {
+				serverName = host
+			} else {
+				serverName = c.Address
+			}
+		}
+
+		opts.TLSConfig = &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			ServerName:         serverName,
+			InsecureSkipVerify: c.TLS.InsecureSkipVerify, // nolint:gosec // opt-in break-glass only
+		}
 	}
 
 	return redis.NewClient(opts)
